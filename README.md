@@ -535,17 +535,6 @@ The analysis includes:
 11. **Continuous model retraining** as data grows
 12. **Scale successful interventions** organization-wide
 
----
-
-## 🎓 Academic Contributions
-
-This analysis demonstrates:
-
-1. **Practical ML application** to workplace wellness
-2. **Integrated approach** combining prediction and segmentation
-3. **Actionable insights** from unsupervised learning (clustering)
-4. **Paradoxical finding** (stressed employees = highest success) challenges assumptions
-5. **FAIR principles** implementation for reproducible health research
 
 ---
 
@@ -621,9 +610,3 @@ Supervisor: Dr. Onicio Neto
 > - ROI opportunity: Small investments in stress/sleep resources = biggest gains
 
 ---
-
-**⭐ If this analysis was helpful, please star this repository!**
-
-**🐛 Found an issue? Please open an issue or submit a PR.**
-
-**📬 Questions? Contact the author via email above.**
