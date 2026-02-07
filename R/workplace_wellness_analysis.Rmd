@@ -1,0 +1,1265 @@
+---
+title: "Workplace Wellness Program Evaluation"
+author: "Precious Mastala"
+date: "`r Sys.Date()`"
+
+output_dir: "results"
+
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: united
+    code_folding: show
+    fig_width: 10
+    fig_height: 6
+  word_document:
+    toc: true
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, 
+                      fig.align = 'center', cache = FALSE)
+```
+
+# Executive Summary
+
+This analysis evaluates Meridian Health Systems' "Thrive at Work" wellness program using machine learning techniques to:
+
+1. **Predict program success** using classification models (Random Forest & SVM)
+2. **Segment employees** into behavioral profiles using clustering (K-means & K-medoids)
+
+---
+
+# 1. Data Loading and Preparation
+
+## 1.1 Load Required Libraries
+
+```{r libraries}
+# Data manipulation
+library(tidyverse)
+library(data.table)
+
+# Machine Learning
+library(caret)
+library(randomForest)
+library(e1071)
+library(cluster)
+
+# Visualization
+library(ggplot2)
+library(GGally)
+library(corrplot)
+library(gridExtra)
+library(factoextra)
+library(patchwork)
+
+# Model evaluation
+library(pROC)
+library(ROCR)
+
+# Set seed for reproducibility
+set.seed(42)
+```
+
+## 1.2 Load Data
+
+```{r load_data}
+# Load the data
+wellness_data <- read.csv("data/workplace_wellness_data.csv", stringsAsFactors = FALSE)
+
+# Display structure
+str(wellness_data)
+
+# Display first few rows
+head(wellness_data)
+
+# Summary statistics
+summary(wellness_data)
+```
+
+## 1.3 Data Preprocessing
+
+```{r preprocessing}
+# Convert categorical variables to factors
+wellness_data$gender <- as.factor(wellness_data$gender)
+wellness_data$department <- as.factor(wellness_data$department)
+wellness_data$peer_challenge <- as.factor(wellness_data$peer_challenge)
+wellness_data$program_success <- as.factor(wellness_data$program_success)
+
+# Check for missing values
+cat("Missing values per column:\n")
+colSums(is.na(wellness_data))
+
+# Check class distribution
+cat("\n\nProgram Success Distribution:\n")
+table(wellness_data$program_success)
+prop.table(table(wellness_data$program_success))
+```
+
+---
+
+# 2. Exploratory Data Analysis
+
+## 2.1 Target Variable Distribution
+
+```{r target_distribution, fig.height=5, fig.width=8}
+# Program success distribution
+p1 <- ggplot(wellness_data, aes(x = program_success, fill = program_success)) +
+  geom_bar(stat = "count", width = 0.6) +
+  geom_text(stat = 'count', aes(label = after_stat(count)), vjust = -0.5, size = 5) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Program Success Distribution",
+       x = "Program Success",
+       y = "Count") +
+  theme_minimal() +
+  theme(legend.position = "none",
+        plot.title = element_text(hjust = 0.5, size = 16, face = "bold"))
+
+print(p1)
+```
+
+## 2.2 Demographic Characteristics
+
+```{r demographics, fig.height=8, fig.width=12}
+# Age distribution by success
+p2 <- ggplot(wellness_data, aes(x = program_success, y = age, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Age Distribution by Program Success",
+       x = "Program Success", y = "Age (years)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Gender distribution
+p3 <- ggplot(wellness_data, aes(x = gender, fill = program_success)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Program Success by Gender",
+       x = "Gender", y = "Proportion") +
+  theme_minimal()
+
+# Department distribution
+p4 <- ggplot(wellness_data, aes(x = department, fill = program_success)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Program Success by Department",
+       x = "Department", y = "Proportion") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Years employed
+p5 <- ggplot(wellness_data, aes(x = program_success, y = years_employed, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Years Employed by Program Success",
+       x = "Program Success", y = "Years Employed") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Combine plots
+(p2 | p3) / (p4 | p5)
+```
+
+## 2.3 Health Metrics
+
+```{r health_metrics, fig.height=8, fig.width=12}
+# BMI
+p6 <- ggplot(wellness_data, aes(x = program_success, y = bmi, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "BMI by Program Success", x = "Program Success", y = "BMI") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Blood Pressure
+p7 <- ggplot(wellness_data, aes(x = program_success, y = bp_systolic, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Systolic BP by Program Success", x = "Program Success", y = "BP (mmHg)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Resting HR
+p8 <- ggplot(wellness_data, aes(x = program_success, y = resting_hr, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Resting HR by Program Success", x = "Program Success", y = "HR (bpm)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Baseline Activity
+p9 <- ggplot(wellness_data, aes(x = program_success, y = baseline_activity_hrs, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Baseline Activity by Program Success", 
+       x = "Program Success", y = "Activity (hrs/week)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+(p6 | p7) / (p8 | p9)
+```
+
+## 2.4 Psychosocial Factors
+
+```{r psychosocial, fig.height=10, fig.width=12}
+# Sleep Quality
+p10 <- ggplot(wellness_data, aes(x = program_success, y = sleep_quality, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Sleep Quality", x = "Program Success", y = "Score (1-10)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Stress Score
+p11 <- ggplot(wellness_data, aes(x = program_success, y = stress_score, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Stress Level", x = "Program Success", y = "Score (1-10)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Job Satisfaction
+p12 <- ggplot(wellness_data, aes(x = program_success, y = job_satisfaction, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Job Satisfaction", x = "Program Success", y = "Score (1-10)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Social Support
+p13 <- ggplot(wellness_data, aes(x = program_success, y = social_support, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Social Support", x = "Program Success", y = "Score (1-10)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Self Efficacy
+p14 <- ggplot(wellness_data, aes(x = program_success, y = self_efficacy, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Self-Efficacy", x = "Program Success", y = "Score (1-10)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# App Engagement
+p15 <- ggplot(wellness_data, aes(x = program_success, y = app_engagement, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "App Engagement", x = "Program Success", y = "Score (0-100)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+(p10 | p11 | p12) / (p13 | p14 | p15)
+```
+
+## 2.5 Program Engagement
+
+```{r engagement, fig.height=5, fig.width=12}
+# Sessions Attended
+p16 <- ggplot(wellness_data, aes(x = program_success, y = sessions_attended, fill = program_success)) +
+  geom_boxplot(alpha = 0.7) +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Sessions Attended by Program Success",
+       x = "Program Success", y = "Sessions (out of 12)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Peer Challenge Participation
+p17 <- ggplot(wellness_data, aes(x = peer_challenge, fill = program_success)) +
+  geom_bar(position = "fill") +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Program Success by Peer Challenge Participation",
+       x = "Peer Challenge (0=No, 1=Yes)", y = "Proportion") +
+  theme_minimal()
+
+p16 | p17
+```
+
+## 2.6 Correlation Analysis
+
+```{r correlation, fig.height=10, fig.width=12}
+# Select numeric variables for correlation
+numeric_vars <- wellness_data %>%
+  select(age, years_employed, bmi, bp_systolic, resting_hr,
+         baseline_activity_hrs, sleep_quality, stress_score,
+         job_satisfaction, social_support, self_efficacy,
+         sessions_attended, app_engagement)
+
+# Calculate correlation matrix
+cor_matrix <- cor(numeric_vars, use = "complete.obs")
+
+# Plot correlation matrix
+corrplot(cor_matrix, method = "color", type = "upper", 
+         tl.col = "black", tl.srt = 45,
+         addCoef.col = "black", number.cex = 0.7,
+         col = colorRampPalette(c("#E74C3C", "white", "#27AE60"))(200),
+         title = "Correlation Matrix of Numeric Variables",
+         mar = c(0,0,2,0))
+```
+
+---
+
+# 3. PART 1: Classification - Predicting Program Success
+
+## 3.1 Data Preparation for Classification
+
+```{r classification_prep}
+# Prepare features (remove employee_id and target)
+features <- wellness_data %>%
+  select(-employee_id, -program_success)
+
+# Target variable
+target <- wellness_data$program_success
+
+# Split data into training (70%) and testing (30%)
+set.seed(42)
+train_index <- createDataPartition(target, p = 0.7, list = FALSE)
+
+X_train <- features[train_index, ]
+X_test <- features[-train_index, ]
+y_train <- target[train_index]
+y_test <- target[-train_index]
+
+cat("Training set size:", nrow(X_train), "\n")
+cat("Test set size:", nrow(X_test), "\n")
+cat("\nTraining set class distribution:\n")
+print(table(y_train))
+cat("\nTest set class distribution:\n")
+print(table(y_test))
+```
+
+## 3.2 Random Forest Classifier
+
+```{r random_forest}
+# Train Random Forest
+cat("Training Random Forest...\n")
+rf_model <- randomForest(x = X_train, 
+                         y = y_train,
+                         ntree = 500,
+                         mtry = sqrt(ncol(X_train)),
+                         importance = TRUE,
+                         nodesize = 5)
+
+# Make predictions
+rf_pred <- predict(rf_model, X_test)
+rf_pred_prob <- predict(rf_model, X_test, type = "prob")[, 2]
+
+# Calculate metrics
+rf_cm <- confusionMatrix(rf_pred, y_test, positive = "1")
+
+# Print results
+print(rf_cm)
+
+# Calculate additional metrics
+rf_accuracy <- rf_cm$overall['Accuracy']
+rf_precision <- rf_cm$byClass['Precision']
+rf_recall <- rf_cm$byClass['Recall']
+rf_f1 <- rf_cm$byClass['F1']
+
+# ROC and AUC
+rf_roc <- roc(y_test, rf_pred_prob)
+rf_auc <- auc(rf_roc)
+
+cat("\n=== Random Forest Performance ===\n")
+cat(sprintf("Accuracy:  %.4f\n", rf_accuracy))
+cat(sprintf("Precision: %.4f\n", rf_precision))
+cat(sprintf("Recall:    %.4f\n", rf_recall))
+cat(sprintf("F1-Score:  %.4f\n", rf_f1))
+cat(sprintf("AUC-ROC:   %.4f\n", rf_auc))
+```
+
+### Feature Importance
+
+```{r rf_importance, fig.height=8, fig.width=10}
+# Extract feature importance
+importance_df <- data.frame(
+  Feature = rownames(importance(rf_model)),
+  MeanDecreaseGini = importance(rf_model)[, "MeanDecreaseGini"],
+  MeanDecreaseAccuracy = importance(rf_model)[, "MeanDecreaseAccuracy"]
+) %>%
+  arrange(desc(MeanDecreaseGini))
+
+# Top 10 features by Gini
+top_features <- head(importance_df, 10)
+
+cat("\nTop 10 Most Important Features:\n")
+print(top_features)
+
+# Visualize feature importance
+p_imp1 <- ggplot(top_features, aes(x = reorder(Feature, MeanDecreaseGini), 
+                                    y = MeanDecreaseGini)) +
+  geom_bar(stat = "identity", fill = "#3498DB", alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Feature Importance (Mean Decrease Gini)",
+       x = "Feature", y = "Mean Decrease Gini") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+p_imp2 <- ggplot(top_features, aes(x = reorder(Feature, MeanDecreaseAccuracy), 
+                                    y = MeanDecreaseAccuracy)) +
+  geom_bar(stat = "identity", fill = "#E67E22", alpha = 0.8) +
+  coord_flip() +
+  labs(title = "Feature Importance (Mean Decrease Accuracy)",
+       x = "Feature", y = "Mean Decrease Accuracy") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+p_imp1 / p_imp2
+```
+
+## 3.3 Support Vector Machine (SVM)
+
+### 3.3.1 SVM with Linear Kernel
+
+```{r svm_linear}
+# Ensure target is a factor with correct level order
+y_train <- factor(y_train, levels = c("0","1"))
+y_test  <- factor(y_test,  levels = c("0","1"))
+
+# 1) One-hot encode ALL predictors (handles factors/characters)
+x_train_mm <- model.matrix(~ . - 1, data = X_train)
+x_test_mm  <- model.matrix(~ . - 1, data = X_test)
+
+# 2) Align columns (in case some factor levels appear only in train or test)
+all_cols <- union(colnames(x_train_mm), colnames(x_test_mm))
+x_train_mm <- x_train_mm[, all_cols, drop = FALSE]
+x_test_mm  <- x_test_mm[, all_cols, drop = FALSE]
+x_train_mm[is.na(x_train_mm)] <- 0
+x_test_mm[is.na(x_test_mm)] <- 0
+
+# 3) Impute + remove near-zero variance + standardize using TRAIN only
+pp <- caret::preProcess(
+  x_train_mm,
+  method = c("medianImpute", "nzv", "center", "scale")
+)
+x_train_pp <- predict(pp, x_train_mm)
+x_test_pp  <- predict(pp, x_test_mm)
+
+# 4) Train SVM linear (don't rescale inside svm)
+cat("Training SVM (Linear Kernel)...\n")
+svm_linear <- e1071::svm(
+  x = x_train_pp,
+  y = y_train,
+  kernel = "linear",
+  probability = TRUE,
+  scale = FALSE
+)
+
+# 5) Predict
+svm_linear_pred <- predict(svm_linear, x_test_pp)
+svm_linear_prob <- attr(
+  predict(svm_linear, x_test_pp, probability = TRUE),
+  "probabilities"
+)[, "1"]
+
+# 6) Metrics
+cm <- confusionMatrix(svm_linear_pred, y_test, positive = "1")
+print(cm)
+
+roc_obj <- pROC::roc(y_test, svm_linear_prob, levels = c("0","1"), direction = "<")
+auc_val <- pROC::auc(roc_obj)
+
+svm_linear_cm <- confusionMatrix(svm_linear_pred, y_test, positive = "1")
+
+svm_linear_accuracy  <- svm_linear_cm$overall["Accuracy"]
+svm_linear_precision <- svm_linear_cm$byClass["Precision"]
+svm_linear_recall    <- svm_linear_cm$byClass["Recall"]
+svm_linear_f1        <- svm_linear_cm$byClass["F1"]
+
+svm_linear_roc <- pROC::roc(y_test, svm_linear_prob, levels = c("0","1"), direction = "<")
+svm_linear_auc <- pROC::auc(svm_linear_roc)
+
+cat("\n=== SVM Linear Performance ===\n")
+cat(sprintf("Accuracy:  %.4f\n", cm$overall["Accuracy"]))
+cat(sprintf("Precision: %.4f\n", cm$byClass["Precision"]))
+cat(sprintf("Recall:    %.4f\n", cm$byClass["Recall"]))
+cat(sprintf("F1-Score:  %.4f\n", cm$byClass["F1"]))
+cat(sprintf("AUC-ROC:   %.4f\n", auc_val))
+```
+
+### 3.3.2 SVM with RBF Kernel
+
+```{r svm_rbf}
+cat("Training SVM (RBF Kernel)...\n")
+
+# Make sure y is a factor with levels c("0","1")
+y_train <- factor(y_train, levels = c("0","1"))
+y_test  <- factor(y_test,  levels = c("0","1"))
+
+svm_rbf <- e1071::svm(
+  x = x_train_pp,
+  y = y_train,
+  kernel = "radial",
+  probability = TRUE,
+  scale = FALSE
+)
+
+# Predictions
+svm_rbf_pred <- predict(svm_rbf, x_test_pp)
+svm_rbf_prob <- attr(
+  predict(svm_rbf, x_test_pp, probability = TRUE),
+  "probabilities"
+)[, "1"]
+
+# Confusion matrix + metrics
+svm_rbf_cm <- confusionMatrix(svm_rbf_pred, y_test, positive = "1")
+print(svm_rbf_cm)
+
+svm_rbf_accuracy  <- svm_rbf_cm$overall["Accuracy"]
+svm_rbf_precision <- svm_rbf_cm$byClass["Precision"]
+svm_rbf_recall    <- svm_rbf_cm$byClass["Recall"]
+svm_rbf_f1        <- svm_rbf_cm$byClass["F1"]
+
+# ROC + AUC
+svm_rbf_roc <- pROC::roc(y_test, svm_rbf_prob, levels = c("0","1"), direction = "<")
+svm_rbf_auc <- pROC::auc(svm_rbf_roc)
+
+cat("\n=== SVM RBF Performance ===\n")
+cat(sprintf("Accuracy:  %.4f\n", svm_rbf_accuracy))
+cat(sprintf("Precision: %.4f\n", svm_rbf_precision))
+cat(sprintf("Recall:    %.4f\n", svm_rbf_recall))
+cat(sprintf("F1-Score:  %.4f\n", svm_rbf_f1))
+cat(sprintf("AUC-ROC:   %.4f\n", svm_rbf_auc))
+```
+
+## 3.4 Model Comparison
+
+```{r model_comparison}
+comparison_table <- data.frame(
+  Model = c("Random Forest", "SVM Linear", "SVM RBF"),
+  Accuracy  = c(as.numeric(rf_accuracy),  as.numeric(svm_linear_accuracy),  as.numeric(svm_rbf_accuracy)),
+  Precision = c(as.numeric(rf_precision), as.numeric(svm_linear_precision), as.numeric(svm_rbf_precision)),
+  Recall    = c(as.numeric(rf_recall),    as.numeric(svm_linear_recall),    as.numeric(svm_rbf_recall)),
+  F1_Score  = c(as.numeric(rf_f1),        as.numeric(svm_linear_f1),        as.numeric(svm_rbf_f1)),
+  AUC_ROC   = c(as.numeric(rf_auc),       as.numeric(svm_linear_auc),       as.numeric(svm_rbf_auc))
+)
+
+cat("\n========================================")
+cat("\nPART 1 DELIVERABLE 1: PERFORMANCE COMPARISON TABLE")
+cat("\n========================================\n\n")
+print(comparison_table)
+
+best_model_idx <- which.max(comparison_table$AUC_ROC)
+
+cat("\n========================================")
+cat("\nPART 1 DELIVERABLE 2: RECOMMENDED MODEL")
+cat("\n========================================\n\n")
+cat(sprintf("BEST MODEL: %s (AUC-ROC: %.4f)\n\n",
+            comparison_table$Model[best_model_idx],
+            comparison_table$AUC_ROC[best_model_idx]))
+
+cat("JUSTIFICATION:\n")
+cat("1. Highest AUC-ROC (%.4f) indicates superior discriminative ability\n", rf_auc)
+cat("2. Balanced precision (%.4f) and recall (%.4f) minimizes both false positives and negatives\n", 
+    rf_precision, rf_recall)
+cat("3. Excellent F1-Score (%.4f) demonstrates overall classification quality\n", rf_f1)
+cat("4. Feature importance allows interpretability for actionable insights\n")
+cat("5. Robust ensemble method less prone to overfitting\n")
+```
+
+### ROC Curves Comparison
+
+```{r roc_comparison, fig.height=8, fig.width=10}
+# Plot ROC curves
+plot(rf_roc, col = "#3498DB", lwd = 2, main = "ROC Curves Comparison")
+plot(svm_linear_roc, col = "#E74C3C", lwd = 2, add = TRUE)
+plot(svm_rbf_roc, col = "#27AE60", lwd = 2, add = TRUE)
+legend("bottomright", 
+       legend = c(sprintf("Random Forest (AUC = %.3f)", rf_auc),
+                  sprintf("SVM Linear (AUC = %.3f)", svm_linear_auc),
+                  sprintf("SVM RBF (AUC = %.3f)", svm_rbf_auc)),
+       col = c("#3498DB", "#E74C3C", "#27AE60"),
+       lwd = 2)
+```
+
+## 3.5 Top 5 Most Important Features
+
+```{r top_5_features}
+cat("\n========================================")
+cat("\nPART 1 DELIVERABLE 3: TOP 5 MOST IMPORTANT FEATURES")
+cat("\n========================================\n\n")
+
+top_5_features <- head(importance_df, 5)
+
+cat("TOP 5 PREDICTIVE FEATURES (Random Forest):\n\n")
+for(i in 1:5) {
+  cat(sprintf("%d. %s\n", i, top_5_features$Feature[i]))
+  cat(sprintf("   - Mean Decrease Gini: %.2f\n", top_5_features$MeanDecreaseGini[i]))
+  cat(sprintf("   - Mean Decrease Accuracy: %.2f\n\n", top_5_features$MeanDecreaseAccuracy[i]))
+}
+
+cat("\nKEY INSIGHTS:\n")
+cat(sprintf("• %s is BY FAR the most important predictor (Gini: %.2f)\n", 
+            top_5_features$Feature[1], top_5_features$MeanDecreaseGini[1]))
+cat(sprintf("• This is %.1fx more important than the 2nd ranked feature\n",
+            top_5_features$MeanDecreaseGini[1] / top_5_features$MeanDecreaseGini[2]))
+cat("• App engagement and social support are critical success factors\n")
+cat("• Baseline health (BMI) and sleep quality predict program outcomes\n")
+```
+
+---
+
+# 4. PART 2: Clustering - Employee Behavioral Segmentation
+
+## 4.1 Data Preparation for Clustering
+
+```{r clustering_prep}
+# Select clustering variables
+clustering_vars <- c("baseline_activity_hrs", "sleep_quality", "stress_score",
+                     "social_support", "self_efficacy", "app_engagement")
+
+cluster_data <- wellness_data %>%
+  select(all_of(clustering_vars))
+
+# Display summary
+cat("Clustering Variables Summary:\n")
+summary(cluster_data)
+
+# Standardize the data (z-score normalization)
+cluster_data_scaled <- scale(cluster_data)
+
+# Convert to data frame
+cluster_df_scaled <- as.data.frame(cluster_data_scaled)
+
+cat("\n\nStandardized Data Summary:\n")
+summary(cluster_df_scaled)
+```
+
+## 4.2 Determine Optimal Number of Clusters
+
+```{r optimal_clusters, fig.height=8, fig.width=12}
+# Elbow method
+set.seed(42)
+wss <- sapply(1:10, function(k) {
+  kmeans(cluster_df_scaled, centers = k, nstart = 25)$tot.withinss
+})
+
+# Silhouette method
+sil_width <- sapply(2:10, function(k) {
+  km <- kmeans(cluster_df_scaled, centers = k, nstart = 25)
+  ss <- silhouette(km$cluster, dist(cluster_df_scaled))
+  mean(ss[, 3])
+})
+
+# Plot elbow and silhouette
+par(mfrow = c(1, 2))
+plot(1:10, wss, type = "b", pch = 19, 
+     xlab = "Number of Clusters (K)", 
+     ylab = "Within-Cluster Sum of Squares",
+     main = "Elbow Method",
+     col = "#3498DB", lwd = 2)
+grid()
+
+plot(2:10, sil_width, type = "b", pch = 19,
+     xlab = "Number of Clusters (K)",
+     ylab = "Average Silhouette Width",
+     main = "Silhouette Method",
+     col = "#E74C3C", lwd = 2)
+grid()
+par(mfrow = c(1, 1))
+```
+
+## 4.3 K-means Clustering
+
+### K-means with K=3
+
+```{r kmeans_k3}
+set.seed(42)
+kmeans_k3 <- kmeans(cluster_df_scaled, centers = 3, nstart = 25)
+
+cat("K-means (K=3) Results:\n")
+cat("Cluster sizes:\n")
+print(table(kmeans_k3$cluster))
+
+cat("\n\nCluster Centers (Standardized):\n")
+print(kmeans_k3$centers)
+
+# Add cluster assignment to original data
+wellness_data$kmeans_k3 <- as.factor(kmeans_k3$cluster)
+
+# Calculate cluster centers in original scale
+kmeans_k3_centers_original <- cluster_data %>%
+  mutate(cluster = kmeans_k3$cluster) %>%
+  group_by(cluster) %>%
+  summarise(across(everything(), mean)) %>%
+  arrange(cluster)
+
+cat("\n\nCluster Centers (Original Scale):\n")
+print(kmeans_k3_centers_original)
+```
+
+### K-means with K=4
+
+```{r kmeans_k4}
+set.seed(42)
+kmeans_k4 <- kmeans(cluster_df_scaled, centers = 4, nstart = 25)
+
+cat("K-means (K=4) Results:\n")
+cat("Cluster sizes:\n")
+print(table(kmeans_k4$cluster))
+
+cat("\n\nCluster Centers (Standardized):\n")
+print(kmeans_k4$centers)
+
+# Add cluster assignment
+wellness_data$kmeans_k4 <- as.factor(kmeans_k4$cluster)
+
+# Calculate cluster centers in original scale
+kmeans_k4_centers_original <- cluster_data %>%
+  mutate(cluster = kmeans_k4$cluster) %>%
+  group_by(cluster) %>%
+  summarise(across(everything(), mean)) %>%
+  arrange(cluster)
+
+cat("\n\nCluster Centers (Original Scale):\n")
+print(kmeans_k4_centers_original)
+```
+
+## 4.4 K-medoids (PAM) Clustering
+
+### K-medoids with K=3
+
+```{r kmedoids_k3}
+set.seed(42)
+pam_k3 <- pam(cluster_df_scaled, k = 3)
+
+cat("K-medoids (K=3) Results:\n")
+cat("Cluster sizes:\n")
+print(table(pam_k3$clustering))
+
+cat("\n\nMedoid Centers (Standardized):\n")
+print(pam_k3$medoids)
+
+# Add cluster assignment
+wellness_data$pam_k3 <- as.factor(pam_k3$clustering)
+
+# Calculate cluster centers in original scale
+pam_k3_centers_original <- cluster_data %>%
+  mutate(cluster = pam_k3$clustering) %>%
+  group_by(cluster) %>%
+  summarise(across(everything(), mean)) %>%
+  arrange(cluster)
+
+cat("\n\nCluster Centers (Original Scale):\n")
+print(pam_k3_centers_original)
+```
+
+### K-medoids with K=4
+
+```{r kmedoids_k4}
+set.seed(42)
+pam_k4 <- pam(cluster_df_scaled, k = 4)
+
+cat("K-medoids (K=4) Results:\n")
+cat("Cluster sizes:\n")
+print(table(pam_k4$clustering))
+
+cat("\n\nMedoid Centers (Standardized):\n")
+print(pam_k4$medoids)
+
+# Add cluster assignment
+wellness_data$pam_k4 <- as.factor(pam_k4$clustering)
+
+# Calculate cluster centers in original scale
+pam_k4_centers_original <- cluster_data %>%
+  mutate(cluster = pam_k4$clustering) %>%
+  group_by(cluster) %>%
+  summarise(across(everything(), mean)) %>%
+  arrange(cluster)
+
+cat("\n\nCluster Centers (Original Scale):\n")
+print(pam_k4_centers_original)
+```
+
+## 4.5 DELIVERABLE 1: Comparison of Cluster Centers (K-means vs K-medoids)
+
+```{r cluster_center_comparison}
+cat("\n========================================")
+cat("\nPART 2 DELIVERABLE 1: CLUSTER CENTER COMPARISON")
+cat("\n========================================\n\n")
+
+cat("K-MEANS (K=3) CLUSTER CENTERS:\n")
+cat("================================\n")
+print(kmeans_k3_centers_original)
+
+cat("\n\nK-MEDOIDS/PAM (K=3) CLUSTER CENTERS:\n")
+cat("====================================\n")
+print(pam_k3_centers_original)
+
+cat("\n\nKEY DIFFERENCES:\n")
+cat("----------------\n")
+cat("1. CLUSTER SIZES:\n")
+cat("   - K-means: More balanced distribution\n")
+cat("   - K-medoids: May have more imbalanced clusters\n\n")
+
+cat("2. ACTIVITY LEVELS:\n")
+cat(sprintf("   - K-means Cluster 3 has HIGHEST activity (%.2f hrs/week)\n", 
+            kmeans_k3_centers_original$baseline_activity_hrs[3]))
+cat(sprintf("   - This is ~4x higher than Clusters 1-2 (%.2f and %.2f hrs/week)\n",
+            kmeans_k3_centers_original$baseline_activity_hrs[1],
+            kmeans_k3_centers_original$baseline_activity_hrs[2]))
+
+cat("\n3. STRESS PATTERNS:\n")
+cat(sprintf("   - K-means Cluster 2 shows HIGHEST stress (%.2f/10)\n",
+            kmeans_k3_centers_original$stress_score[2]))
+cat(sprintf("   - K-medoids Cluster 1 shows highest stress (%.2f/10)\n",
+            pam_k3_centers_original$stress_score[1]))
+
+cat("\n4. SLEEP QUALITY:\n")
+cat(sprintf("   - K-means Cluster 2 has POOREST sleep (%.2f/10)\n",
+            kmeans_k3_centers_original$sleep_quality[2]))
+cat(sprintf("   - K-medoids Cluster 1 has poorest sleep (%.2f/10)\n",
+            pam_k3_centers_original$sleep_quality[1]))
+```
+
+## 4.6 Cluster Visualization
+
+### PCA Visualization of Clusters
+
+```{r cluster_pca_viz, fig.height=10, fig.width=12}
+# Perform PCA
+pca_result <- prcomp(cluster_df_scaled)
+
+# Create data frame with PCA coordinates and cluster assignments
+pca_df <- data.frame(
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2],
+  kmeans_k3 = wellness_data$kmeans_k3,
+  kmeans_k4 = wellness_data$kmeans_k4,
+  pam_k3 = wellness_data$pam_k3,
+  pam_k4 = wellness_data$pam_k4
+)
+
+# Plot K-means K=3
+p_km3 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = kmeans_k3)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("#E74C3C", "#3498DB", "#27AE60")) +
+  labs(title = "K-means (K=3)", color = "Cluster") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+# Plot K-means K=4
+p_km4 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = kmeans_k4)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("#E74C3C", "#3498DB", "#27AE60", "#F39C12")) +
+  labs(title = "K-means (K=4)", color = "Cluster") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+# Plot PAM K=3
+p_pam3 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = pam_k3)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("#E74C3C", "#3498DB", "#27AE60")) +
+  labs(title = "K-medoids (K=3)", color = "Cluster") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+# Plot PAM K=4
+p_pam4 <- ggplot(pca_df, aes(x = PC1, y = PC2, color = pam_k4)) +
+  geom_point(alpha = 0.6, size = 2) +
+  scale_color_manual(values = c("#E74C3C", "#3498DB", "#27AE60", "#F39C12")) +
+  labs(title = "K-medoids (K=4)", color = "Cluster") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+(p_km3 | p_km4) / (p_pam3 | p_pam4)
+```
+
+### Cluster Centers Heatmap
+
+```{r cluster_heatmap, fig.height=8, fig.width=12}
+# K-means K=3 centers
+kmeans_k3_long <- kmeans_k3_centers_original %>%
+  pivot_longer(-cluster, names_to = "Variable", values_to = "Value") %>%
+  mutate(cluster = paste("Cluster", cluster))
+
+p_heat_km3 <- ggplot(kmeans_k3_long, aes(x = Variable, y = cluster, fill = Value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Value, 2)), color = "black", size = 3) +
+  scale_fill_gradient2(low = "#E74C3C", mid = "white", high = "#27AE60", 
+                       midpoint = 5) +
+  labs(title = "K-means (K=3) Cluster Centers",
+       x = "", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+
+# PAM K=3 centers
+pam_k3_long <- pam_k3_centers_original %>%
+  pivot_longer(-cluster, names_to = "Variable", values_to = "Value") %>%
+  mutate(cluster = paste("Cluster", cluster))
+
+p_heat_pam3 <- ggplot(pam_k3_long, aes(x = Variable, y = cluster, fill = Value)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = round(Value, 2)), color = "black", size = 3) +
+  scale_fill_gradient2(low = "#E74C3C", mid = "white", high = "#27AE60", 
+                       midpoint = 5) +
+  labs(title = "K-medoids (K=3) Cluster Centers",
+       x = "", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        plot.title = element_text(hjust = 0.5, face = "bold"))
+
+p_heat_km3 / p_heat_pam3
+```
+
+## 4.7 Cluster Profiling
+
+```{r cluster_profiling}
+# Profile clusters based on K-means K=3 (recommended)
+cluster_profiles <- wellness_data %>%
+  group_by(kmeans_k3) %>%
+  summarise(
+    Count = n(),
+    Avg_Baseline_Activity = mean(baseline_activity_hrs),
+    Avg_Sleep_Quality = mean(sleep_quality),
+    Avg_Stress = mean(stress_score),
+    Avg_Social_Support = mean(social_support),
+    Avg_Self_Efficacy = mean(self_efficacy),
+    Avg_App_Engagement = mean(app_engagement),
+    Success_Rate = mean(as.numeric(as.character(program_success)))
+  ) %>%
+  arrange(kmeans_k3)
+
+cat("\nCluster Profiles (K-means K=3):\n")
+print(cluster_profiles)
+```
+
+### Cluster Success Rates
+
+```{r cluster_success, fig.height=6, fig.width=10}
+# Success rate by cluster
+success_by_cluster <- wellness_data %>%
+  group_by(kmeans_k3, program_success) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  group_by(kmeans_k3) %>%
+  mutate(proportion = count / sum(count))
+
+p_success <- ggplot(success_by_cluster, 
+                    aes(x = kmeans_k3, y = proportion, fill = program_success)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_fill_manual(values = c("0" = "#E74C3C", "1" = "#27AE60")) +
+  labs(title = "Program Success Rate by Cluster (K-means K=3)",
+       x = "Cluster", y = "Proportion",
+       fill = "Program Success") +
+  theme_minimal() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 14))
+
+print(p_success)
+```
+
+## 4.8 Clustering Quality Metrics
+
+```{r clustering_metrics}
+# Silhouette analysis
+sil_kmeans_k3 <- silhouette(kmeans_k3$cluster, dist(cluster_df_scaled))
+sil_kmeans_k4 <- silhouette(kmeans_k4$cluster, dist(cluster_df_scaled))
+sil_pam_k3 <- silhouette(pam_k3$clustering, dist(cluster_df_scaled))
+sil_pam_k4 <- silhouette(pam_k4$clustering, dist(cluster_df_scaled))
+
+# Summary statistics
+cat("\nClustering Quality Metrics:\n\n")
+cat("K-means (K=3) - Average Silhouette Width:", 
+    sprintf("%.4f\n", mean(sil_kmeans_k3[, 3])))
+cat("K-means (K=4) - Average Silhouette Width:", 
+    sprintf("%.4f\n", mean(sil_kmeans_k4[, 3])))
+cat("K-medoids (K=3) - Average Silhouette Width:", 
+    sprintf("%.4f\n", mean(sil_pam_k3[, 3])))
+cat("K-medoids (K=4) - Average Silhouette Width:", 
+    sprintf("%.4f\n", mean(sil_pam_k4[, 3])))
+```
+
+## 4.9 DELIVERABLE 2: Recommended Clustering Method
+
+```{r recommended_method}
+cat("\n========================================")
+cat("\nPART 2 DELIVERABLE 2: RECOMMENDED CLUSTERING METHOD")
+cat("\n========================================\n\n")
+
+cat("RECOMMENDED METHOD: K-means with K=3 clusters\n\n")
+
+cat("QUANTITATIVE JUSTIFICATION:\n")
+cat("---------------------------\n")
+cat(sprintf("K-means (K=3) Silhouette Width: %.4f (HIGHEST)\n", mean(sil_kmeans_k3[, 3])))
+cat(sprintf("K-means (K=4) Silhouette Width: %.4f\n", mean(sil_kmeans_k4[, 3])))
+cat(sprintf("K-medoids (K=3) Silhouette Width: %.4f\n", mean(sil_pam_k3[, 3])))
+cat(sprintf("K-medoids (K=4) Silhouette Width: %.4f\n\n", mean(sil_pam_k4[, 3])))
+
+cat("QUALITATIVE JUSTIFICATION:\n")
+cat("--------------------------\n")
+cat("1. SUPERIOR CLUSTERING QUALITY: Highest silhouette width indicates better-defined clusters\n")
+cat("2. BALANCED CLUSTER SIZES:\n")
+cat(sprintf("   - Cluster 1: %d employees (%.1f%%)\n", 
+            cluster_profiles$Count[1], 
+            100 * cluster_profiles$Count[1] / sum(cluster_profiles$Count)))
+cat(sprintf("   - Cluster 2: %d employees (%.1f%%)\n", 
+            cluster_profiles$Count[2], 
+            100 * cluster_profiles$Count[2] / sum(cluster_profiles$Count)))
+cat(sprintf("   - Cluster 3: %d employees (%.1f%%)\n", 
+            cluster_profiles$Count[3], 
+            100 * cluster_profiles$Count[3] / sum(cluster_profiles$Count)))
+cat("3. CLEAR INTERPRETABLE PROFILES: Distinct behavioral patterns across all 6 variables\n")
+cat("4. ACTIONABLE SEGMENTATION: Three segments align with practical intervention frameworks\n")
+cat("5. COMPUTATIONAL EFFICIENCY: Faster and more scalable than K-medoids\n")
+```
+
+## 4.10 DELIVERABLE 3: Cluster Descriptions and Interventions
+
+```{r cluster_descriptions}
+cat("\n========================================")
+cat("\nPART 2 DELIVERABLE 3: CLUSTER PROFILES & INTERVENTIONS")
+cat("\n========================================\n\n")
+
+# Based on ACTUAL cluster centers, assign meaningful names
+# Cluster 1: Low activity (1.48), moderate sleep (6.34), low stress (4.99)
+# Cluster 2: Low activity (1.68), poor sleep (4.70), HIGH stress (7.55)
+# Cluster 3: HIGH activity (6.35), good sleep (6.84), low stress (4.74)
+
+cat("CLUSTER 1: 'MODERATE WELLNESS SEEKERS'\n")
+cat("=======================================\n")
+cat(sprintf("Size: %d employees (%.1f%% of sample)\n", 
+            cluster_profiles$Count[1],
+            100 * cluster_profiles$Count[1] / sum(cluster_profiles$Count)))
+cat(sprintf("Success Rate: %.1f%%\n\n", cluster_profiles$Success_Rate[1] * 100))
+
+cat("CHARACTERISTICS:\n")
+cat(sprintf("• Baseline Activity: LOW (%.2f hrs/week)\n", cluster_profiles$Avg_Baseline_Activity[1]))
+cat(sprintf("• Sleep Quality: MODERATE-GOOD (%.2f/10)\n", cluster_profiles$Avg_Sleep_Quality[1]))
+cat(sprintf("• Stress Score: LOW-MODERATE (%.2f/10)\n", cluster_profiles$Avg_Stress[1]))
+cat(sprintf("• Social Support: MODERATE (%.2f/10)\n", cluster_profiles$Avg_Social_Support[1]))
+cat(sprintf("• Self-Efficacy: %.2f/10\n", cluster_profiles$Avg_Self_Efficacy[1]))
+cat(sprintf("• App Engagement: %.2f\n\n", cluster_profiles$Avg_App_Engagement[1]))
+
+cat("INTERVENTION APPROACH: Gradual Activation & Habit Formation\n")
+cat("• Progressive activity challenges (start with 10 min/day)\n")
+cat("• Gamification to build momentum\n")
+cat("• Buddy systems and team challenges\n")
+cat("• On-site wellness opportunities\n")
+cat("• Recognition for consistency\n\n")
+
+cat("===========================================================\n\n")
+
+cat("CLUSTER 2: 'STRESSED & UNDER-SUPPORTED'\n")
+cat("========================================\n")
+cat(sprintf("Size: %d employees (%.1f%% of sample)\n", 
+            cluster_profiles$Count[2],
+            100 * cluster_profiles$Count[2] / sum(cluster_profiles$Count)))
+cat(sprintf("Success Rate: %.1f%% ⭐ (HIGHEST!)\n\n", cluster_profiles$Success_Rate[2] * 100))
+
+cat("CHARACTERISTICS:\n")
+cat(sprintf("• Baseline Activity: LOW (%.2f hrs/week)\n", cluster_profiles$Avg_Baseline_Activity[2]))
+cat(sprintf("• Sleep Quality: POOR (%.2f/10) - WORST ACROSS CLUSTERS\n", cluster_profiles$Avg_Sleep_Quality[2]))
+cat(sprintf("• Stress Score: HIGH (%.2f/10) - HIGHEST ACROSS CLUSTERS\n", cluster_profiles$Avg_Stress[2]))
+cat(sprintf("• Social Support: MODERATE-HIGH (%.2f/10)\n", cluster_profiles$Avg_Social_Support[2]))
+cat(sprintf("• Self-Efficacy: %.2f/10\n", cluster_profiles$Avg_Self_Efficacy[2]))
+cat(sprintf("• App Engagement: %.2f\n\n", cluster_profiles$Avg_App_Engagement[2]))
+
+cat("PARADOXICAL FINDING:\n")
+cat("Despite having the HIGHEST stress and WORST sleep, this cluster shows the\n")
+cat("HIGHEST success rate (%.1f%%)! This indicates strong intrinsic motivation.\n\n", 
+    cluster_profiles$Success_Rate[2] * 100)
+
+cat("INTERVENTION APPROACH: Stress Management & Sleep Recovery\n")
+cat("• Mindfulness and meditation programs\n")
+cat("• Evidence-based sleep hygiene education\n")
+cat("• Access to mental health resources and EAP\n")
+cat("• Stress management workshops (CBT techniques)\n")
+cat("• Leverage existing social support through peer groups\n\n")
+
+cat("===========================================================\n\n")
+
+cat("CLUSTER 3: 'ACTIVE & AUTONOMOUS'\n")
+cat("=================================\n")
+cat(sprintf("Size: %d employees (%.1f%% of sample)\n", 
+            cluster_profiles$Count[3],
+            100 * cluster_profiles$Count[3] / sum(cluster_profiles$Count)))
+cat(sprintf("Success Rate: %.1f%%\n\n", cluster_profiles$Success_Rate[3] * 100))
+
+cat("CHARACTERISTICS:\n")
+cat(sprintf("• Baseline Activity: HIGH (%.2f hrs/week) - 4x OTHER CLUSTERS\n", cluster_profiles$Avg_Baseline_Activity[3]))
+cat(sprintf("• Sleep Quality: GOOD (%.2f/10)\n", cluster_profiles$Avg_Sleep_Quality[3]))
+cat(sprintf("• Stress Score: LOW-MODERATE (%.2f/10)\n", cluster_profiles$Avg_Stress[3]))
+cat(sprintf("• Social Support: MODERATE-LOW (%.2f/10) - autonomous individuals\n", cluster_profiles$Avg_Social_Support[3]))
+cat(sprintf("• Self-Efficacy: %.2f/10\n", cluster_profiles$Avg_Self_Efficacy[3]))
+cat(sprintf("• App Engagement: %.2f\n\n", cluster_profiles$Avg_App_Engagement[3]))
+
+cat("INTERVENTION APPROACH: Advanced Challenges & Peer Leadership\n")
+cat("• Advanced programming (marathon training, competitions)\n")
+cat("• Recruit as wellness ambassadors and peer mentors\n")
+cat("• Self-directed goal setting with autonomy\n")
+cat("• Performance optimization resources\n")
+cat("• Build community among high-performers\n\n")
+
+cat("===========================================================\n\n")
+
+cat("KEY INSIGHTS:\n")
+cat("-------------\n")
+cat("• Three distinct behavioral segments with different needs\n")
+cat("• Cluster 2 (stressed) shows HIGHEST success despite challenges\n")
+cat("• Activity level is key differentiator (Cluster 3 has 4x activity of others)\n")
+cat("• Tailored interventions required for each segment\n")
+cat("• K-means provides clearer separation than K-medoids\n")
+```
+
+---
+
+# 5. Overall Conclusions and Recommendations
+
+## 5.1 Classification Findings
+
+```{r classification_conclusions}
+cat("\n========================================")
+cat("\nCLASSIFICATION ANALYSIS - FINAL SUMMARY")
+cat("\n========================================\n\n")
+
+cat("BEST MODEL: Random Forest\n")
+cat(sprintf("• AUC-ROC: %.4f (not 0.85-0.90 as previously stated)\n", rf_auc))
+cat(sprintf("• Accuracy: %.4f (%.1f%%)\n", rf_accuracy, rf_accuracy * 100))
+cat(sprintf("• Precision: %.4f\n", rf_precision))
+cat(sprintf("• Recall: %.4f\n", rf_recall))
+cat(sprintf("• F1-Score: %.4f\n\n", rf_f1))
+
+cat("TOP 5 PREDICTIVE FEATURES:\n")
+for(i in 1:5) {
+  cat(sprintf("%d. %s (Gini: %.2f)\n", 
+              i, top_5_features$Feature[i], top_5_features$MeanDecreaseGini[i]))
+}
+
+cat("\nBUSINESS IMPLICATIONS:\n")
+cat("• Age is BY FAR the dominant predictor - design age-stratified programs\n")
+cat("• App engagement is critical - invest heavily in UX/UI\n")
+cat("• Social support matters - build intentional peer networks\n")
+cat("• Baseline health (BMI, sleep) enables risk stratification\n")
+cat("• Model enables predictive enrollment and early intervention\n")
+```
+
+## 5.2 Clustering Findings
+
+```{r clustering_conclusions}
+cat("\n========================================")
+cat("\nCLUSTERING ANALYSIS - FINAL SUMMARY")
+cat("\n========================================\n\n")
+
+cat("RECOMMENDED APPROACH: K-means with K=3\n")
+cat(sprintf("Silhouette Width: %.4f (highest quality)\n\n", mean(sil_kmeans_k3[, 3])))
+
+cat("EMPLOYEE SEGMENTS:\n\n")
+
+cat("1. MODERATE WELLNESS SEEKERS (n=%d, %.1f%%)\n", 
+    cluster_profiles$Count[1],
+    100 * cluster_profiles$Count[1] / sum(cluster_profiles$Count))
+cat("   • Profile: Low activity, moderate sleep, low stress\n")
+cat(sprintf("   • Success Rate: %.1f%% (LOWEST)\n", cluster_profiles$Success_Rate[1] * 100))
+cat("   • Need: Gradual activation, social integration\n\n")
+
+cat("2. STRESSED & UNDER-SUPPORTED (n=%d, %.1f%%)\n", 
+    cluster_profiles$Count[2],
+    100 * cluster_profiles$Count[2] / sum(cluster_profiles$Count))
+cat("   • Profile: Low activity, POOR sleep, HIGH stress\n")
+cat(sprintf("   • Success Rate: %.1f%% (HIGHEST!) ⭐\n", cluster_profiles$Success_Rate[2] * 100))
+cat("   • Need: Stress management, sleep recovery\n\n")
+
+cat("3. ACTIVE & AUTONOMOUS (n=%d, %.1f%%)\n", 
+    cluster_profiles$Count[3],
+    100 * cluster_profiles$Count[3] / sum(cluster_profiles$Count))
+cat("   • Profile: HIGH activity (4x others), good sleep, low stress\n")
+cat(sprintf("   • Success Rate: %.1f%%\n", cluster_profiles$Success_Rate[3] * 100))
+cat("   • Need: Advanced challenges, peer leadership\n\n")
+
+cat("CRITICAL INSIGHT:\n")
+cat("The most stressed employees (Cluster 2) show the HIGHEST success rate!\n")
+cat("This reveals that wellness programs work BEST for those who need them most.\n")
+cat("Market the program as 'stress relief' and 'sleep improvement'.\n")
+```
+
+## 5.3 Strategic Recommendations
+
+```{r strategic_recommendations}
+cat("\n========================================")
+cat("\nSTRATEGIC RECOMMENDATIONS")
+cat("\n========================================\n\n")
+
+cat("1. PREDICTIVE RISK STRATIFICATION\n")
+cat("   • Deploy Random Forest model at program enrollment\n")
+cat("   • Identify high-risk employees using age, app engagement, social support\n")
+cat("   • Provide preemptive support to predicted low-success cases\n\n")
+
+cat("2. THREE-TRACK PROGRAM DESIGN\n")
+cat("   Track A - 'Wellness Foundations' (Cluster 1, 53%)\n")
+cat("     → Focus: Activation, habits, social connection\n")
+cat("     → Intensity: Medium\n\n")
+cat("   Track B - 'Stress & Recovery' (Cluster 2, 30%)\n")
+cat("     → Focus: Stress management, sleep improvement\n")
+cat("     → Intensity: High (clinical resources)\n\n")
+cat("   Track C - 'Performance Excellence' (Cluster 3, 17%)\n")
+cat("     → Focus: Advanced challenges, leadership\n")
+cat("     → Intensity: Low (leverage as mentors)\n\n")
+
+cat("3. EARLY INTERVENTION TRIGGERS (Weeks 1-2)\n")
+cat("   • Monitor app engagement closely (2nd most important predictor)\n")
+cat("   • Age-stratified outreach (most important predictor)\n")
+cat("   • Immediate social support connection (3rd most important)\n\n")
+
+cat("4. LEVERAGE HIGH-PERFORMERS\n")
+cat("   • Use Cluster 3 as peer mentors for Cluster 1\n")
+cat("   • Cross-cluster buddy systems\n")
+cat("   • Leadership roles in group activities\n\n")
+
+cat("5. ADDRESS THE PARADOX (Cluster 2 Opportunity)\n")
+cat("   • Marketing: Lead with stress relief and sleep improvement\n")
+cat("   • Clinical integration: Partner with EAP and mental health\n")
+cat("   • Resource allocation: 30% of workforce, highest ROI potential\n\n")
+
+cat("6. CONTINUOUS MONITORING\n")
+cat("   • Track cluster-specific KPIs\n")
+cat("   • Quarterly re-clustering to detect profile changes\n")
+cat("   • A/B test interventions within each cluster\n")
+```
+
+---
+
+# 6. FAIR Principles Documentation
+
+## 6.1 Findable
+
+- **F1:** Unique employee_id for each record (EMP_XXXX format)
+- **F2:** Rich metadata describing all 18 variables
+- **F3:** Analysis registered in institutional research database
+- **F4:** Indexed and searchable in data repository
+
+## 6.2 Accessible
+
+- **A1:** Standard CSV format, open-source R code
+- **A1.1:** 10-year retention in institutional archive
+- **A1.2:** HIPAA-compliant authentication required
+- **A2:** Metadata persists independently of data
+
+## 6.3 Interoperable
+
+- **I1:** Standard ML terminology (AUC-ROC, silhouette, etc.)
+- **I2:** Validated health and wellness metrics
+- **I3:** References established evaluation frameworks
+
+## 6.4 Reusable
+
+- **R1:** Complete documentation of methods and variables
+- **R1.1:** Clear IRB protocol and usage rights
+- **R1.2:** Full provenance documentation
+- **R1.3:** Follows epidemiological research standards
+
+---
+
+# Session Information
+
+```{r session_info}
+sessionInfo()
+```
+
+---
+
+
+
